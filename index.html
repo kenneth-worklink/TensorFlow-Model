@@ -2,76 +2,128 @@
 <html lang="zh-Hant">
 <head>
     <meta charset="UTF-8">
-    <title>AI 員工打卡異常偵測</title>
+    <title>AI 批次異常打卡偵測系統</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.18.0/dist/tf.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js"></script>
     <style>
-        body { font-family: -apple-system, sans-serif; padding: 20px; background-color: #f4f7f6; }
-        .container { max-width: 450px; margin: auto; background: white; padding: 30px; border-radius: 15px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
-        h2 { color: #333; text-align: center; }
-        label { display: block; margin-top: 15px; font-weight: bold; color: #666; }
-        input { width: 100%; padding: 12px; margin-top: 5px; border: 1px solid #ddd; border-radius: 8px; box-sizing: border-box; }
-        button { width: 100%; padding: 15px; margin-top: 25px; background-color: #007bff; color: white; border: none; border-radius: 8px; font-size: 16px; cursor: pointer; transition: 0.3s; }
-        button:hover { background-color: #0056b3; }
-        #result { margin-top: 25px; padding: 15px; border-radius: 8px; text-align: center; font-weight: bold; display: none; }
-        .normal { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
-        .anomaly { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        body { font-family: -apple-system, sans-serif; padding: 20px; background-color: #f0f2f5; color: #333; }
+        .container { max-width: 800px; margin: auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+        h2 { text-align: center; color: #1a73e8; }
+        .section { border: 1px solid #e0e0e0; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
+        label { font-weight: bold; display: block; margin-bottom: 8px; }
+        input[type="file"] { margin-bottom: 15px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 14px; }
+        th, td { border: 1px solid #ddd; padding: 10px; text-align: left; }
+        th { background-color: #f8f9fa; }
+        .anomaly-row { background-color: #fff1f0; color: #cf1322; font-weight: bold; }
+        .status-bar { text-align: center; font-size: 13px; color: #666; margin-bottom: 20px; }
+        .btn { width: 100%; padding: 12px; background: #1a73e8; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 16px; }
+        .btn:hover { background: #1557b0; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h2>🔍 異常打卡偵測</h2>
-        <div id="status" style="font-size: 12px; text-align: center; color: #999;">模型載入中...</div>
-        
-        <label>本次工時 (小時):</label>
-        <input type="number" id="duration" value="9" step="0.5">
-        
-        <label>上班時段 (0-23時):</label>
-        <input type="number" id="startHour" value="9">
-        
-        <label>星期幾 (0週日 - 6週六):</label>
-        <input type="number" id="weekday" value="1" min="0" max="6">
-        
-        <button onclick="detect()">立即分析</button>
-        <div id="result"></div>
+        <h2>🔍 AI 員工打卡異常批次偵測</h2>
+        <div id="status" class="status-bar">🚀 正在啟動 AI 引擎...</div>
+
+        <div class="section">
+            <label>📂 上傳新的打卡記錄 (CSV):</label>
+            <input type="file" id="csvFile" accept=".csv">
+            <button class="btn" onclick="handleBatch()">開始批次分析</button>
+        </div>
+
+        <div id="resultArea" style="display:none;">
+            <h3>📊 分析結果 (僅顯示疑似異常項目)</h3>
+            <table id="resultTable">
+                <thead>
+                    <tr>
+                        <th>員工編號</th>
+                        <th>日期</th>
+                        <th>工時</th>
+                        <th>異常評分</th>
+                    </tr>
+                </thead>
+                <tbody id="tableBody"></tbody>
+            </table>
+        </div>
     </div>
 
     <script>
         let model;
-        // 自動抓取目前的網址路徑來載入模型
+        const THRESHOLD = 10; // 異常門檻值
+
         async function init() {
             try {
-                // 注意：這裡的路徑必須對應你上傳的資料夾名稱
                 model = await tf.loadLayersModel('./tfjs_model/model.json');
-                document.getElementById('status').innerText = "✅ AI 引擎已就緒";
+                document.getElementById('status').innerText = "✅ AI 引擎已就緒，請上傳 CSV 檔案。";
             } catch (err) {
-                document.getElementById('status').innerText = "❌ 模型載入失敗，請確認 tfjs_model 資料夾已上傳";
-                console.error(err);
+                document.getElementById('status').innerText = "❌ 模型載入失敗，請檢查檔案路徑。";
             }
         }
 
-        async function detect() {
-            if (!model) return;
-            const resDiv = document.getElementById('result');
+        async function handleBatch() {
+            const fileInput = document.getElementById('csvFile');
+            if (!fileInput.files[0]) return alert("請先選擇 CSV 檔案！");
+
+            document.getElementById('status').innerText = "⏳ 正在分析數據...";
             
-            const d = parseFloat(document.getElementById('duration').value);
-            const h = parseFloat(document.getElementById('startHour').value);
-            const w = parseFloat(document.getElementById('weekday').value);
-
-            // 特徵歸一化 (需與訓練時一致)
-            const input = tf.tensor2d([[d / 24, h / 24, w / 6]]);
-            const output = model.predict(input);
-            const mse = tf.sub(input, output).square().mean().dataSync()[0];
-            const score = (mse * 1000).toFixed(2);
-
-            resDiv.style.display = "block";
-            if (score < 10) { // 這裡的 10 是門檻值，可依需求調整
-                resDiv.className = "normal";
-                resDiv.innerText = "✅ 正常打卡行為 (評分: " + score + ")";
-            } else {
-                resDiv.className = "anomaly";
-                resDiv.innerText = "🚨 偵測到疑似異常！ (評分: " + score + ")";
-            }
+            Papa.parse(fileInput.files[0], {
+                header: true,
+                skipEmptyLines: true,
+                complete: async function(results) {
+                    processRecords(results.data);
+                }
+            });
         }
+
+        async function processRecords(data) {
+            const tbody = document.getElementById('tableBody');
+            tbody.innerHTML = ""; // 清空表格
+            let anomalyCount = 0;
+
+            // 這裡模擬訓練時的特徵工程 (Feature Engineering)
+            const tempIn = {};
+            
+            for (let row of data) {
+                const id = row['員工編號'];
+                const dateStr = row['上下班日期'];
+                const timeStr = row['上下班時間'];
+                const flag = row['上下班標記'];
+
+                if (flag === 'I') {
+                    tempIn[id] = new Date(`${dateStr} ${timeStr}`);
+                } else if (flag === 'O' && tempIn[id]) {
+                    const timeOut = new Date(`${dateStr} ${timeStr}`);
+                    const duration = (timeOut - tempIn[id]) / (1000 * 60 * 60);
+                    
+                    if (duration > 0) {
+                        // 1. 準備 AI 特徵
+                        const startHour = tempIn[id].getHours();
+                        const weekday = tempIn[id].getDay();
+                        
+                        // 2. 進行預測
+                        const input = tf.tensor2d([[duration / 24, startHour / 24, weekday / 6]]);
+                        const output = model.predict(input);
+                        const mse = tf.sub(input, output).square().mean().dataSync()[0];
+                        const score = (mse * 1000).toFixed(2);
+
+                        // 3. 如果超過門檻，加入表格
+                        if (score > THRESHOLD) {
+                            anomalyCount++;
+                            const tr = document.createElement('tr');
+                            tr.className = "anomaly-row";
+                            tr.innerHTML = `<td>${id}</td><td>${dateStr}</td><td>${duration.toFixed(1)}h</td><td>${score}</td>`;
+                            tbody.appendChild(tr);
+                        }
+                    }
+                    delete tempIn[id];
+                }
+            }
+
+            document.getElementById('resultArea').style.display = "block";
+            document.getElementById('status').innerText = `✅ 分析完成！共發現 ${anomalyCount} 筆異常打卡。`;
+        }
+
         init();
     </script>
 </body>
